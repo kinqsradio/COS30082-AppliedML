@@ -1,0 +1,10 @@
+transformers
+numpy
+pandas
+datasets
+matplotlib
+tensorflow
+feedparser
+scikit-learn
+accelerate
+wordcloud

@@ -5,6 +5,8 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
 
 def create_label_map(file_path):
     label_map = {}
@@ -20,6 +22,20 @@ def create_label_map(file_path):
                 label_map[label_id] = class_name
 
     return {k: re.sub(r'\d+$', '', v).strip() for k, v in label_map.items()}
+
+def show_sample(dataset, num_samples=10):
+    plt.figure(figsize=(25, 4))
+    for i in range(num_samples):
+        ax = plt.subplot(1, num_samples, i + 1)
+        img, label = dataset[i] 
+        img = img.numpy().transpose((1, 2, 0)) 
+        img = img * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406]) 
+        img = np.clip(img, 0, 1)
+        plt.imshow(img)
+        plt.title(f'Label: {label}\nClass: {dataset.label_map[label]}')
+        plt.axis('off')
+    plt.show()
+
 
 class DatasetPreprocessing(Dataset):
     """
@@ -96,6 +112,7 @@ class DatasetPreprocessing(Dataset):
                 
         if self.debug:
             print(f'Total images loaded: {len(images)}')
+            print(f'Total labels loaded: {len(labels)}')
                 
         return images, labels
 

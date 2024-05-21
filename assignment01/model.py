@@ -12,8 +12,6 @@ class BirdClassifier(nn.Module):
         fine_tune_start (int): The layer index from which to start fine-tuning the model.
                                Set to a negative value to fine-tune all layers. Default is 5.
 
-    Example usage:
-        >>> model = BirdClassifier(num_classes=200, fine_tune_start=5)
     """
     
     def __init__(self, num_classes=200, fine_tune_start=5):
@@ -34,25 +32,13 @@ class BirdClassifier(nn.Module):
                 for param in layer.parameters():
                     param.requires_grad = False
 
-        # Replace the original fully connected layer with a new one that includes
-        # dropout for regularization and outputs to the number of classes in the dataset.
         num_ftrs = self.base_model.fc.in_features
         self.base_model.fc = nn.Sequential(
             nn.Linear(num_ftrs, 512),
             nn.ReLU(),
-            nn.Dropout(0.5),  # Dropout for regularization
+            nn.Dropout(0.5),
             nn.Linear(512, num_classes)
         )
     
     def forward(self, x):
-        """
-        Defines the forward pass of the model.
-        
-        Parameters:
-            x (torch.Tensor): Input batch of images (tensor).
-
-        Returns:
-            torch.Tensor: The model's predictions for the input batch.
-        """
-        # Pass the input through the base model and the modified fully connected layers.
         return self.base_model(x)

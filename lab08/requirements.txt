@@ -1,0 +1,7 @@
+matplotlib
+torch
+torchvision
+face_recognition
+omegaconf
+facetorch
+opencv-python

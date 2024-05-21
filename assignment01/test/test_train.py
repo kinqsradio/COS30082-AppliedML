@@ -1,7 +1,7 @@
 from torch.utils.data import DataLoader
-from ..dataset import DatasetPreprocessing, create_label_map
-from ..model import BirdClassifier
-from ..train import train_model
+from dataset import DatasetPreprocessing, create_label_map
+from model import BirdClassifier
+from helper import train_model
 
 if __name__ == '__main__':
 
