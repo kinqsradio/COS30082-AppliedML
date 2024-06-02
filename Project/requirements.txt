@@ -11,3 +11,7 @@ kaggle
 pygwalker
 tensorboard
 scikit-learn
+streamlit
+opencv-python-headless
+dlib
+watchdog

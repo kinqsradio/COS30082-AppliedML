@@ -3,132 +3,147 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from models import FaceRecognition, CONFIG
-from datasets import DataPreprocessing, TRAIN_PATH, VAL_PATH, TEST_PATH
-from helper import evaluate_verification
+from models import FaceVerificationModel
+from datasets import AnhDangDataset, TRAIN_PATH, VAL_PATH, TEST_PATH
 import os
 
-# tensorboard --logdir=runs/training_logs
+torch.backends.cudnn.enabled = False
+torch.cuda.empty_cache()
+
+# Tensorboard logging
 log_dir = 'runs/training_logs'
+writer = SummaryWriter(log_dir=log_dir)
+
 model_save_path = 'models/train/best_model/'
 best_model_path = os.path.join(model_save_path, 'best_model.pt')
-best_val_model_path = os.path.join(model_save_path, 'best_val_model.pt')
-
-# Ensure model save directory exists
 os.makedirs(model_save_path, exist_ok=True)
 
-def train(num_epochs=25, warmup_episodes=50):
-    # Initialize TensorBoard writer
-    writer = SummaryWriter(log_dir=log_dir)
+class CustomTrainer:
+    """
+    Custom trainer for training a face verification model
+    
+    Methods:
+    - train_epoch: Train the model for one epoch
+    - validate_epoch: Validate the model for one epoch
+    - train: Train the model for multiple epochs
+    
+    Args:
+    - model: Face verification model
+    - train_loader: DataLoader for training dataset
+    - val_loader: DataLoader for validation dataset
+    - criterion: Triplet loss function
+    - optimizer: Optimizer for training the model
+    - device: Device to run the model on
+    - num_epochs: Number of epochs to train the model
+    """
+    def __init__(self, model, train_loader, val_loader, criterion, optimizer, device, num_epochs=10):
+        self.model = model
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.criterion = criterion
+        self.optimizer = optimizer
+        self.device = device
+        self.num_epochs = num_epochs
+        self.current_epoch = 0
+        self.best_val_loss = float('inf')
 
-    # Initialize datasets using predefined paths
-    train_dataset = DataPreprocessing(TRAIN_PATH)
-    val_dataset = DataPreprocessing(VAL_PATH)
-    test_dataset = DataPreprocessing(TEST_PATH)
-
-    # DataLoader setup
-    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
-
-    # Model initialization
-    model = FaceRecognition(CONFIG)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=0.001)
-
-    best_val_acc = 0.0
-    best_model_acc = 0.0
-
-    # Training loop
-    for epoch in range(num_epochs):
-        model.train()
+    def train_epoch(self):
+        self.model.train()
         running_loss = 0.0
-        for inputs, labels in train_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            
-            # Zero the parameter gradients
-            optimizer.zero_grad()
+        for anchor, positive, negative in self.train_loader:
+            anchor, positive, negative = anchor.to(self.device), positive.to(self.device), negative.to(self.device)
             
             # Forward pass
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            anchor_embedding = self.model(anchor)
+            positive_embedding = self.model(positive)
+            negative_embedding = self.model(negative)
+            loss = self.criterion(anchor_embedding, positive_embedding, negative_embedding)
             
             # Backward pass and optimization
+            self.optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
+            self.optimizer.step()
             
-            running_loss += loss.item() * inputs.size(0)
-
-        epoch_loss = running_loss / len(train_loader.dataset)
-        print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}')
-        writer.add_scalar('Loss/train', epoch_loss, epoch)
-
-        # Validation loop
-        model.eval()
-        val_loss = 0.0
-        val_corrects = 0
-        with torch.no_grad():
-            for inputs, labels in val_loader:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item() * inputs.size(0)
-                _, preds = torch.max(outputs, 1)
-                val_corrects += torch.sum(preds == labels.data)
-
-        val_loss /= len(val_loader.dataset)
-        val_acc = val_corrects.double() / len(val_loader.dataset)
-        print(f'Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}')
-        writer.add_scalar('Loss/val', val_loss, epoch)
-        writer.add_scalar('Accuracy/val', val_acc, epoch)
-
-        # Save the best validation model
-        if epoch >= warmup_episodes and val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save(model.state_dict(), best_val_model_path)
-            print(f'Best validation model saved at epoch {epoch + 1}')
-
-        # Save the best model based on training accuracy
-        train_corrects = 0
-        model.eval()
-        with torch.no_grad():
-            for inputs, labels in train_loader:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
-                _, preds = torch.max(outputs, 1)
-                train_corrects += torch.sum(preds == labels.data)
+            running_loss += loss.item()
         
-        train_acc = train_corrects.double() / len(train_loader.dataset)
-        if epoch >= warmup_episodes and train_acc > best_model_acc:
-            best_model_acc = train_acc
-            torch.save(model.state_dict(), best_model_path)
-            print(f'Best model saved at epoch {epoch + 1}')
+        avg_train_loss = running_loss / len(self.train_loader)
+        writer.add_scalar('Loss/train', avg_train_loss, self.current_epoch)
+        writer.add_scalar('Learning Rate', self.optimizer.param_groups[0]['lr'], self.current_epoch)
+        return avg_train_loss
 
-        # Verification evaluation
-        roc_auc = evaluate_verification(model, val_loader, device, epoch)
-        print(f'Epoch {epoch + 1}, AUC: {roc_auc:.4f}')
-        writer.add_scalar('AUC/val', roc_auc, epoch)
+    def validate_epoch(self):
+        self.model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for anchor, positive, negative in self.val_loader:
+                anchor, positive, negative = anchor.to(self.device), positive.to(self.device), negative.to(self.device)
+                anchor_embedding = self.model(anchor)
+                positive_embedding = self.model(positive)
+                negative_embedding = self.model(negative)
+                loss = self.criterion(anchor_embedding, positive_embedding, negative_embedding)
+                val_loss += loss.item()
+        
+        avg_val_loss = val_loss / len(self.val_loader)
+        writer.add_scalar('Loss/val', avg_val_loss, self.current_epoch)        
+        return avg_val_loss
 
-    # Testing loop
-    model.eval()
-    test_corrects = 0
-    with torch.no_grad():
-        for inputs, labels in test_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs)
-            _, preds = torch.max(outputs, 1)
-            test_corrects += torch.sum(preds == labels.data)
+    def train(self):
+        for epoch in range(self.num_epochs):
+            print(f'Epoch [{epoch+1}/{self.num_epochs}]')
+            self.current_epoch = epoch
+            train_loss = self.train_epoch()
+            val_loss = self.validate_epoch()
+            
+            print(f'Epoch [{epoch+1}/{self.num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
 
-    test_acc = test_corrects.double() / len(test_loader.dataset)
-    print(f'Test Accuracy: {test_acc:.4f}')
-    writer.add_scalar('Accuracy/test', test_acc)
+            # Save the best model
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                torch.save(self.model.state_dict(), best_model_path)
+                print(f'Saved best model with val loss: {val_loss:.4f}')
 
-    # Close TensorBoard writer
-    writer.close()
+def main():
+    max_samples = 1000
+    train_dataset = AnhDangDataset(TRAIN_PATH, max_samples=max_samples)
+    val_dataset = AnhDangDataset(VAL_PATH, max_samples=max_samples)
+    test_dataset = AnhDangDataset(TEST_PATH, max_samples=max_samples)
+    
+    print(f'----- Dataset Information -----')
+    print(f'Train dataset size: {len(train_dataset)}')
+    print(f'Validation dataset size: {len(val_dataset)}')
+    print(f'Test dataset size: {len(test_dataset)}')
+
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    
+    print(f'----- DataLoader Information -----')
+    print(f'Train loader size: {len(train_loader)}')
+    print(f'Validation loader size: {len(val_loader)}')
+    print(f'Test loader size: {len(test_loader)}')
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = FaceVerificationModel(embedding_size=128).to(device)
+
+    model_save_path = 'models/train/best_model/best_model.pt'
+    if os.path.exists(model_save_path):
+        model.load_state_dict(torch.load(model_save_path))
+        print(f'Loaded model from: {model_save_path}')
+
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)    
+    criterion = nn.TripletMarginLoss(margin=1.2, p=2)
+
+    trainer = CustomTrainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        device=device,
+        num_epochs=200
+    )
+
+    trainer.train()
 
 if __name__ == '__main__':
-    train(num_epochs=10, warmup_episodes=2)
+    main()
